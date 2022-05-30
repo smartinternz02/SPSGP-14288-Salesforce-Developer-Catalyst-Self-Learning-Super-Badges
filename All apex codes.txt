@@ -1,0 +1,431 @@
+AccountProcessor.cls
+public class AccountProcessor {
+
+    @future
+    public static void countContacts(List<Id> accountId_lst) {
+
+        Map<Id,Integer> account_cno = new Map<Id,Integer>(); 
+        List<account> account_lst_all = new List<account>([select id, (select id from contacts) from account]);
+        for(account a:account_lst_all) {
+            account_cno.put(a.id,a.contacts.size()); //populate the map
+
+        }
+  
+        List<account> account_lst = new List<account>(); // list of account that we will upsert
+ 
+        for(Id accountId : accountId_lst) {
+            if(account_cno.containsKey(accountId)) {
+                account acc = new account();
+                acc.Id = accountId;
+                acc.Number_of_Contacts__c = account_cno.get(accountId);
+                account_lst.add(acc);
+            }
+
+        }
+        upsert account_lst;
+    }
+
+}
+	
+AccountProcessorTest.cls
+@isTest
+public class AccountProcessorTest {
+
+    @isTest
+    public static void testFunc() {
+        account acc = new account();
+        acc.name = 'MATW INC';
+        insert acc;
+
+        contact con = new contact();
+        con.lastname = 'Mann1';
+        con.AccountId = acc.Id;
+        insert con;
+        contact con1 = new contact();
+        con1.lastname = 'Mann2';
+        con1.AccountId = acc.Id;
+        insert con1;
+
+
+        List<Id> acc_list = new List<Id>();
+        acc_list.add(acc.Id);
+        Test.startTest();
+ AccountProcessor.countContacts(acc_list);
+        Test.stopTest();
+        List<account> acc1 = new List<account>([select Number_of_Contacts__c from account where id = :acc.id]);
+        system.assertEquals(2,acc1[0].Number_of_Contacts__c);
+    }
+
+}
+	
+
+LeadProcessor.cls
+global class LeadProcessor implements Database.Batchable<sObject> {
+    global Integer count = 0;
+
+    global Database.QueryLocator start (Database.BatchableContext bc) {
+        return Database.getQueryLocator('Select Id, LeadSource from lead');
+    }
+
+    global void execute (Database.BatchableContext bc,List<Lead> l_lst) {
+        List<lead> l_lst_new = new List<lead>();
+        for(lead l : l_lst) {
+            l.leadsource = 'Dreamforce';
+            l_lst_new.add(l);
+            count+=1;
+        }
+        update l_lst_new;
+    }
+ 
+    global void finish (Database.BatchableContext bc) {
+        system.debug('count = '+count);
+    }
+}
+
+
+
+
+
+
+
+
+
+
+LeadProcessorTest.cls
+@isTest
+public class LeadProcessorTest {
+
+    @isTest    
+    public static void testit() {
+        List<lead> l_lst = new List<lead>();
+        for (Integer i = 0; i<200; i++) {
+            Lead l = new lead();
+            l.LastName = 'name'+i;
+            l.company = 'company';
+            l.Status =  'somestatus';
+            l_lst.add(l);
+        }
+        insert l_lst;
+
+        test.startTest();
+
+        Leadprocessor lp = new Leadprocessor();
+        Id batchId = Database.executeBatch(lp);
+        Test.stopTest();
+
+    }
+
+}	
+
+
+
+
+
+
+
+
+
+
+
+AddPrimaryContact.cls
+public class AddPrimaryContact implements Queueable {
+    public contact c;
+    public String state;
+
+    public AddPrimaryContact(Contact c, String state) {
+        this.c = c;
+        this.state = state;
+    }
+
+    public void execute(QueueableContext qc) {
+        system.debug('this.c = '+this.c+' this.state = '+this.state);
+        List<Account> acc_lst = new List<account>([select id, name, BillingState from account where account.BillingState = :this.state limit 200]);
+        List<contact> c_lst = new List<contact>();
+        for(account a: acc_lst) {
+            contact c = new contact();
+            c = this.c.clone(false, false, false, false);
+            c.AccountId = a.Id;
+            c_lst.add(c);
+        }
+        insert c_lst;
+    }
+
+}
+	
+
+
+
+
+
+
+
+
+AddPrimaryContactTest.cls
+@IsTest
+public class AddPrimaryContactTest {
+
+    @IsTest
+    public static void testing() {
+        List<account> acc_lst = new List<account>();
+        for (Integer i=0; i<50;i++) {
+            account a = new account(name=string.valueOf(i),billingstate='NY');
+            system.debug('account a = '+a);
+            acc_lst.add(a);
+        }
+        for (Integer i=0; i<50;i++) {
+            account a = new account(name=string.valueOf(50+i),billingstate='CA');
+            system.debug('account a = '+a);
+            acc_lst.add(a);
+        }      
+        insert acc_lst;
+        Test.startTest();
+        contact c = new contact(lastname='alex');
+        AddPrimaryContact apc = new AddPrimaryContact(c,'CA');
+        system.debug('apc = '+apc);
+        System.enqueueJob(apc);
+        Test.stopTest();
+        List<contact> c_lst = new List<contact>([select id from contact]);
+        Integer size = c_lst.size();
+        system.assertEquals(50, size);
+    }
+}
+
+DailyLeadProcessor.cls
+public class DailyLeadProcessor implements schedulable{
+
+    public void execute(schedulableContext sc) {
+        List<lead> l_lst_new = new List<lead>();
+        List<lead> l_lst = new List<lead>([select id, leadsource from lead where leadsource = null]);
+        for(lead l : l_lst) {
+            l.leadsource = 'Dreamforce';
+            l_lst_new.add(l);
+        }
+        update l_lst_new;
+    }
+}
+DailyLeadProcessorTest
+@isTest
+public class DailyLeadProcessorTest {
+    @isTest
+    public static void testing() {
+        List<lead> l_lst = new List<lead>();
+        for(Integer i=0;i<200;i++) {
+            lead l = new lead();
+            l.lastname = 'lastname'+i;
+            l.Company = 'company'+i;
+            l_lst.add(l);
+        }
+        insert l_lst;
+        Test.startTest();
+        DailyLeadProcessor dlp = new DailyLeadProcessor ();
+        String jobId = System.Schedule('dailyleadprocessing','0 0 0 1 12 ? 2016',d
+        Test.stopTest();
+        List<lead> l_lst_chk = new List<lead>([select id,leadsource from lead where leadsource != 'Dreamforce']);
+        System.assertequals(0,l_lst_chk.size());
+    }
+}
+	
+
+AnimalLocator.cls
+
+public class AnimalLocator {
+ public class cls_animal {
+  public Integer id; 
+  public String name; 
+  public String eats; 
+  public String says; 
+ }    
+public class JSONOutput{
+ public cls_animal animal;
+
+ //public JSONOutput parse(String json){
+ //return (JSONOutput) System.JSON.deserialize(json, JSONOutput.class);
+ //}
+}
+
+    public static String getAnimalNameById (Integer id) {
+        Http http = new Http();
+        HttpRequest request = new HttpRequest();
+        request.setEndpoint('https://th-apex-http-callout.herokuapp.com/animals/' + id);
+        //request.setHeader('id', String.valueof(id)); -- cannot be used in this challenge :)
+        request.setMethod('GET');
+        HttpResponse response = http.send(request);
+        system.debug('response: ' + response.getBody());
+        //Map<String,Object> map_results = (Map<String,Object>) JSON.deserializeUntyped(response.getBody());
+        jsonOutput results = (jsonOutput) JSON.deserialize(response.getBody(), jsonOutput.class);
+        //Object results = (Object) map_results.get('animal');
+  system.debug('results= ' + results.animal.name);
+        return(results.animal.name);
+    }
+
+}
+AnimalLocatorMock
+@IsTest
+global class AnimalLocatorMock implements HttpCalloutMock {
+
+    global HTTPresponse respond(HTTPrequest request) {
+        Httpresponse response = new Httpresponse();
+        response.setStatusCode(200);
+        //-- directly output the JSON, instead of creating a logic
+        //response.setHeader('key, value)
+        //Integer id = Integer.valueof(request.getHeader('id'));
+        //Integer id = 1;
+        //List<String> lst_body = new List<String> {'majestic badger', 'fluffy bunny'};
+        //system.debug('animal return value: ' + lst_body[id]);
+        response.setBody('{"animal":{"id":1,"name":"chicken","eats":"chicken food","says":"cluck cluck"}}');
+        return response;
+    }
+
+}
+AnimalLocatorTest.cls
+@IsTest
+public class AnimalLocatorTest {
+    @isTest
+    public static void testAnimalLocator() {
+        Test.setMock(HttpCalloutMock.class, new AnimalLocatorMock());
+        //Httpresponse response = AnimalLocator.getAnimalNameById(1);
+        String s =  AnimalLocator.getAnimalNameById(1);
+        system.debug('string returned: ' + s);
+    }
+
+}
+
+Apex Service
+//Generated by wsdl2apex
+
+public class ParkService {
+    public class byCountryResponse {
+        public String[] return_x;
+        private String[] return_x_type_info = new String[]{'return','http://parks.services/',null,'0','-1','false'};
+        private String[] apex_schema_type_info = new String[]{'http://parks.services/','false','false'};
+        private String[] field_order_type_info = new String[]{'return_x'};
+    }
+    public class byCountry {
+        public String arg0;
+        private String[] arg0_type_info = new String[]{'arg0','http://parks.services/',null,'0','1','false'};
+        private String[] apex_schema_type_info = new String[]{'http://parks.services/','false','false'};
+        private String[] field_order_type_info = new String[]{'arg0'};
+    }
+    public class ParksImplPort {
+        public String endpoint_x = 'https://th-apex-soace/parks';
+        public Map<String,String> inputHttpHeaders_x;
+        public Map<String,String> outputHttpHeaders_x;
+        public String clientCertName_x;
+        public String clientCert_x;
+        public String clientCertPasswd_x;
+        public Integer timeout_x;
+        private String[] ns_map_type_info = new String[]{'http://parks.services/', 'ParkService'};
+        public String[] byCountry(String arg0) {
+            ParkService.byCountry request_x = new ParkService.byCountry();
+            request_x.arg0 = arg0;
+            ParkService.byCountryResponse response_x;
+            Map<String, ParkService.byCountryResponse> response_map_x = new Map<String, ParkService.byCountryResponse>();
+            response_map_x.put('response_x', response_x);
+            WebServiceCallout.invoke(
+              this,
+              request_x,
+              response_map_x,
+              new String[]{endpoint_x,
+              '',
+              'http://parks.services/',
+              'byCountry',
+              'http://parks.services/',
+              'byCountryResponse',
+              'ParkService.byCountryResponse'}
+            );
+            response_x = response_map_x.get('response_x');
+            return response_x.return_x;
+        }
+    }
+}
+ParkLocator.apex
+public class ParkLocator {
+    public static String[] country(String country){
+        ParkService.ParksImplPort parks = new ParkService.ParksImplPort();
+        String[] parksname = parks.byCountry(country);
+        return parksname;
+    }
+}
+ParkLocatorTest.apex
+@isTest
+private class ParkLocatorTest{
+    @isTest 
+    static void testParkLocator() {
+        Test.setMock(WebServiceMock.class, new ParkServiceMock());
+        String[] arrayOfParks = ParkLocator.country('India');
+        System.assertEquals('Park1', arrayOfParks[0]);
+    }
+}
+	ParkServiceMock.apex
+@isTest
+global class ParkServiceMock implements WebServiceMock {
+    global void doInvoke(
+           Object stub,
+           Object request,
+           Map<String, Object> response,
+           String endpoint,
+           String soapAction,
+           String requestName,
+           String responseNS,
+           String responseName,
+           String responseType) {
+        ParkService.byCountryResponse response_x = new ParkService.byCountryResponse();
+        List<String> lstOfDummyParks = new List<String> {'Park1','Park2','Park3'};
+        response_x.return_x = lstOfDummyParks;
+
+        response.put('response_x', response_x);
+    }
+}
+
+AccountManager.cls
+@RestResource(urlMapping='/Accounts/*/contacts')
+global with sharing class AccountManager {
+
+
+    @HttpGet
+    global static account getAccount() {
+
+        RestRequest request = RestContext.request;
+
+        String accountId = request.requestURI.substring(request.requestURI.lastIndexOf('/')-18,
+          request.requestURI.lastIndexOf('/'));
+        List<Account> a = [select id, name, (select id, name from contacts) from account where id = :accountId];
+        List<contact> co = [select id, name from contact where account.id = :accountId];
+        system.debug('** a[0]= '+ a[0]);
+        return a[0];
+
+    }
+}
+AccountManagerTest.cls
+	@istest
+public class AccountManagerTest {
+@istest static void testGetContactsByAccountId() {
+Id recordId = createTestRecord();
+// Set up a test request
+RestRequest request = new RestRequest();
+request.requestUri =
+'https://yourInstance.salesforce.com/services/apexrest/Accounts/'+ recordId+'/Contacts';
+request.httpMethod = 'GET';
+RestContext.request = request;
+// Call the method to test
+Account thisAccount = AccountManager.getAccount();
+// Verify results
+System.assert(thisAccount!= null);
+System.assertEquals('Test record', thisAccount.Name);
+}
+// Helper method
+static Id createTestRecord() {
+// Create test record
+Account accountTest = new Account(
+Name='Test record');
+insert accountTest;
+Contact contactTest = new Contact(
+FirstName='John',
+LastName='Doe',
+AccountId=accountTest.Id
+);
+return accountTest.Id;
+}
+
+	
+
